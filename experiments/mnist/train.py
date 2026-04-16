@@ -102,6 +102,10 @@ def train_lap(run, runpath, lap: int, rng: inox.random.PRNG):
     # A_eval should be (16, 784, 100)
     A_eval = np.stack([make_A_on_the_fly(i) for i in idx_eval])
 
+    print(f"y_eval shape: {y_eval.shape}")
+    print(f"idx_eval shape: {idx_eval.shape}")
+    print(f"A_eval shape: {A_eval.shape}")
+
     if lap > 0:
         previous = load_module(runpath / f'checkpoint_{lap - 1}.pkl')
     else:
@@ -176,6 +180,8 @@ def train_lap(run, runpath, lap: int, rng: inox.random.PRNG):
                 maxiter=config.maxiter
             )
 
+            print(f"Confirmed x_samples shape: {x_samples.shape}")
+            
             run.log({'lap': lap, 'loss': np.mean(losses),
                      'samples': wandb.Image(to_pil(x_samples.reshape(4, 4, 28, 28, 1), zoom=4))})
         else:
