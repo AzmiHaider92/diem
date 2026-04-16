@@ -83,7 +83,7 @@ def fit_moments(
     A: Callable[[Array], Array],
     y: Array,
     cov_y: Tuple[Array, DPLR],
-    iterations: int = 16,
+    iterations: int = 1,
     key: Array = None,
     **kwargs,
 ) -> Tuple[Array, DPLR]:

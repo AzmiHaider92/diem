@@ -20,29 +20,34 @@ from pathlib import Path
 from utils import *
 
 PATH = Path(".")
+total_pixels = 28*28
 
 CONFIG = {
+    # Data
     'n_measurements': 100,
-    'total_pixels': 784,
+    # Architecture
     'hid_channels': (128, 256, 384),
     'hid_blocks': (5, 5, 5),
     'kernel_size': (3, 3),
     'emb_features': 256,
-    'img_size': 28,
     'heads': {1: 4},
     'dropout': 0.1,
+    # Sampling
     'sampler': 'ddpm',
     'sde': {'a': 1e-3, 'b': 1e2},
-    'heuristic': 'cov_x',
+    'heuristic': None,
     'discrete': 256,
     'maxiter': 1,
+    # Training
     'epochs': 256,
-    'batch_size': 256,
+    'batch_size': 64,
     'scheduler': 'constant',
     'lr_init': 2e-4,
     'lr_end': 1e-6,
     'lr_warmup': 0.0,
     'optimizer': 'adam',
+    'weight_decay': None,
+    'clip': 1.0,
     'ema_decay': 0.9999,
 }
 
