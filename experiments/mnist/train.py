@@ -55,7 +55,9 @@ def make_A_on_the_fly(idx, total_pixels, n_measurements):
     return A.numpy()
 
 
-def generate(model, dataset, rng, batch_size, **kwargs):
+def generate(model, dataset, rng, **kwargs):
+    batch_size = kwargs.get('batch_size', 64)
+    
     def transform(batch, indices):
         y = np.array(batch['y']).reshape(len(indices), -1)
         idx_seeds = np.array(batch['idx']).flatten()
@@ -120,8 +122,8 @@ def train_lap(run, runpath, lap: int, rng: inox.random.PRNG):
     previous = static(jax.device_put(arrays, replicated))
 
     print(f"\n--- Lap {lap}: Generating Synthetic Data ---")
-    trainset = generate(previous, dataset['train'], rng, config.batch_size, shard=True, **config)
-    testset = generate(previous, dataset['test'], rng, config.batch_size, shard=True, **config)
+    trainset = generate(previous, dataset['train'], rng, shard=True, **config)
+    testset = generate(previous, dataset['test'], rng, shard=True, **config)
 
     # Model Initialization
     x_fit = flatten(trainset[:16384]['x'])
