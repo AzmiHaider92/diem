@@ -18,8 +18,6 @@ from pathlib import Path
 # isort: split
 from utils import *
 
-# Set your local path here
-PATH = Path("./data")
 
 CONFIG = {
     # Data
@@ -39,7 +37,7 @@ CONFIG = {
     'maxiter': 1,
     # Training
     'epochs': 256,
-    'batch_size': 256,
+    'batch_size': 64,
     'scheduler': 'constant',
     'lr_init': 2e-4,
     'lr_end': 1e-6,
