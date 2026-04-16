@@ -177,7 +177,7 @@ def train_lap(run, runpath, lap: int, rng: inox.random.PRNG):
 
 
 if __name__ == '__main__':
-    runid = 'cifar_diem_' + wandb.util.generate_id()
+    runid = 'mnist_diem_' + wandb.util.generate_id()
 
     run = wandb.init(
         project='mnist-flow-matching',

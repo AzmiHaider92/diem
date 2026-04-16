@@ -31,12 +31,20 @@ def sample(
     if shard:
         y, A = distribute((y, A))
 
+    # --- ADD THIS CLEANUP BLOCK ---
+    # Remove keys that sample_any/DDPM/DDIM don't understand
+    # These are specific to your model architecture or data setup
+    for key_to_remove in ['n_measurements', 'total_pixels', 'img_size', 'hid_channels',
+                          'hid_blocks', 'kernel_size', 'emb_features', 'heads', 'dropout']:
+        kwargs.pop(key_to_remove, None)
+    # ------------------------------
+
     x = sample_any(
         model=model,
         shape=(img_size**2,),
         shard=shard,
         A=inox.Partial(measure, A),
-        y=y.reshape(y.shape[0], -1), # Ensure y is flat
+        y=y.reshape(y.shape[0], -1),
         cov_y=1e-3**2,
         key=key,
         **kwargs,
