@@ -74,7 +74,8 @@ def run_training():
     sde = VESDE(**CONFIG['sde'])
 
     # Load Data
-    dataset = load_from_disk(PATH / f'hf/cifar-mask-{CONFIG.corruption}')
+    corruption = CONFIG['corruption']
+    dataset = load_from_disk(PATH / f'hf/cifar-mask-{corruption}')
     dataset.set_format('numpy')
 
     # --- START LAPS ---
