@@ -20,7 +20,7 @@ from pathlib import Path
 from utils import *
 
 PATH = Path(".")
-total_pixels = 28*28
+total_pixels = 784  # 28*28
 n_measurements = 100
 
 CONFIG = {
@@ -34,7 +34,7 @@ CONFIG = {
     # Sampling
     'sampler': 'ddpm',
     'sde': {'a': 1e-3, 'b': 1e2},
-    'heuristic': None,
+    'heuristic': 'cov_x',
     'discrete': 256,
     'maxiter': 1,
     # Training
@@ -60,9 +60,11 @@ def make_A_on_the_fly(idx, total_pixels, n_measurements):
 
 
 def generate(model, dataset, rng, **kwargs):
+    # Pull batch_size from kwargs to avoid double-passing later
     batch_size = kwargs.get('batch_size', 64)
 
     def transform(batch, indices):
+        # Reshape y from (batch, 10, 10) to (batch, 100)
         y = np.array(batch['y']).reshape(len(indices), -1)
         idx_seeds = np.array(batch['idx']).flatten()
 
@@ -71,7 +73,8 @@ def generate(model, dataset, rng, **kwargs):
             for s in idx_seeds
         ])
 
-        x = sample(model, y, A, rng.split(), **kwargs)
+        # Ensure sample doesn't get duplicate img_size or batch_size
+        x = sample(model, y, A, rng.split(), img_size=28, **kwargs)
         return {'x': np.asarray(x).reshape(-1, 28, 28, 1)}
 
     types = {'x': Array3D(shape=(28, 28, 1), dtype='float32')}
@@ -97,49 +100,72 @@ def train_lap(run, runpath, lap: int, rng: inox.random.PRNG):
     dataset = load_from_disk(PATH / f'hf/mnist-linear-{n_measurements}')
     dataset.set_format('numpy')
 
-    # Prep Eval Data
-    eval_batch = dataset['test'][:16]
-    y_eval = eval_batch['y'].reshape(16, -1)
-    idx_eval = eval_batch['idx'].flatten()
-    A_eval = np.stack([make_A_on_the_fly(i, 784, n_measurements) for i in idx_eval])
+    trainset_yA = dataset['train']
+    testset_yA = dataset['test']
+
+    # Evaluation subset preparation
+    eval_indices = testset_yA[:16]['idx'].flatten()
+    y_eval = testset_yA[:16]['y'].reshape(16, -1)
+
+    def get_A_jax(idx):
+        # Recreate A matrix using JAX for the eval set to keep it in the graph if needed
+        # Note: Must match the logic of make_A_on_the_fly exactly
+        key = jax.random.PRNGKey(idx.astype(jnp.int32))
+        A = jax.random.normal(key, (total_pixels, n_measurements))
+        A = A / jnp.clip(jnp.linalg.norm(A, axis=0, keepdims=True), 1e-12, None)
+        return A
+
+    A_eval = jax.vmap(get_A_jax)(jnp.array(eval_indices))
     y_eval, A_eval = jax.device_put((y_eval, A_eval), distributed)
 
+    # Initialization/Previous Model Loading
     if lap > 0:
         previous = load_module(runpath / f'checkpoint_{lap - 1}.pkl')
     else:
-        fit_batch = dataset['train'][:16384]
-        y_fit = fit_batch['y'].reshape(16384, -1)
-        idx_fit = fit_batch['idx'].flatten()
-        A_fit = np.stack([make_A_on_the_fly(i, 784, n_measurements) for i in idx_fit])
+        # Fit initial moments for Lap 0
+        fit_data = trainset_yA[:16384]
+        y_fit = fit_data['y'].reshape(16384, -1)
+        idx_fit = fit_data['idx'].flatten()
+
+        # We need A_fit for the GaussianDenoiser initial moments
+        A_fit = jax.vmap(get_A_jax)(jnp.array(idx_fit))
         y_fit, A_fit = jax.device_put((y_fit, A_fit), distributed)
 
         mu_x, cov_x = fit_moments(
-            features=784, rank=64, shard=True,
-            A=inox.Partial(measure, A_fit), y=y_fit,
-            cov_y=1e-3 ** 2, sampler='ddim', sde=sde,
-            steps=256, maxiter=None, key=rng.split(),
+            features=total_pixels,
+            rank=64,
+            shard=True,
+            A=inox.Partial(measure, A_fit),
+            y=y_fit,
+            cov_y=1e-3 ** 2,
+            sampler='ddim',
+            sde=sde,
+            steps=256,
+            maxiter=None,
+            key=rng.split(),
         )
         previous = GaussianDenoiser(mu_x, cov_x)
 
-    # Distributed Setup
-    static, arrays = previous.partition()
-    previous = static(jax.device_put(arrays, replicated))
+    # Ensure previous model is sharded correctly
+    static_prev, arrays_prev = previous.partition()
+    previous = static_prev(jax.device_put(arrays_prev, replicated))
 
     print(f"\n--- Lap {lap}: Generating Synthetic Data ---")
-    trainset = generate(previous, dataset['train'], rng, shard=True, **config)
-    testset = generate(previous, dataset['test'], rng, shard=True, **config)
+    # Call generate without passing batch_size twice (once in config, once explicitly)
+    trainset = generate(model=previous, dataset=trainset_yA, rng=rng, shard=False, **config)
+    testset = generate(model=previous, dataset=testset_yA, rng=rng, shard=False, **config)
 
-    # Model Initialization
+    # Moments & Model Initialization
     x_fit = flatten(trainset[:16384]['x'])
     mu_x, cov_x = ppca(x_fit, rank=64, key=rng.split())
 
-    model = previous if lap > 0 else make_model(key=rng.split(), **config)
+    model = previous if lap > 0 else make_model(key=rng.split(), img_size=28, **config)
     model.mu_x, model.cov_x = mu_x, cov_x
     model.train(True)
 
     static, params, others = model.partition(nn.Parameter)
     objective = DenoiserLoss(sde=sde)
-    optimizer = Adam(steps=config.epochs * len(dataset['train']) // config.batch_size, **config)
+    optimizer = Adam(steps=config.epochs * len(trainset_yA) // config.batch_size, **config)
     opt_state = optimizer.init(params)
     ema = EMA(decay=config.ema_decay)
     avrg = params
@@ -171,7 +197,8 @@ def train_lap(run, runpath, lap: int, rng: inox.random.PRNG):
         if (epoch + 1) % 16 == 0:
             model_eval = static(avrg, others)
             model_eval.train(False)
-            x_samp = sample(model_eval, y_eval, A_eval, rng.split(), shard=True, **config)
+            # Sample with cleaned kwargs to avoid TypeError in DDPM
+            x_samp = sample(model_eval, y_eval, A_eval, rng.split(), shard=True, img_size=28, **config)
             run.log({'lap': lap, 'loss': np.mean(losses),
                      'samples': wandb.Image(to_pil(x_samp.reshape(4, 4, 28, 28, 1), zoom=4))})
         else:
@@ -181,17 +208,9 @@ def train_lap(run, runpath, lap: int, rng: inox.random.PRNG):
 
 
 if __name__ == '__main__':
-    runid = 'mnist_diem_' + wandb.util.generate_id()
-
-    run = wandb.init(
-        project='mnist-flow-matching',
-        id=runid,
-        config=CONFIG,
-    )
-
-    runpath = f'runs/{run.name}_{run.id}'
-    os.makedirs(runpath, exist_ok=True)
-
+    run = wandb.init(project='mnist-flow-matching', config=CONFIG)
+    runpath = Path(f"runs/{run.name}_{run.id}")
+    runpath.mkdir(parents=True, exist_ok=True)
     rng = inox.random.PRNG(42)
 
     for lap in range(32):
