@@ -183,7 +183,7 @@ def train_lap(run, runpath, lap: int, rng: inox.random.PRNG):
             print(f"Confirmed x_samples shape: {x_samples.shape}")
             
             run.log({'lap': lap, 'loss': np.mean(losses),
-                     'samples': wandb.Image(to_pil(x_samples.reshape(4, 4, 28, 28, 1), zoom=4))})
+                     'samples': wandb.Image(to_pil(x_samples.reshape(1, 1, 28, 28, 1), zoom=4))})
         else:
             run.log({'lap': lap, 'loss': np.mean(losses)})
 
