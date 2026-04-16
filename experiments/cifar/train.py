@@ -17,7 +17,7 @@ from utils import *
 
 
 CONFIG = {
-    'n_measurements': 128,
+    'corruption': 75,
     'total_pixels': 784,
     'hid_channels': (128, 256, 384),
     'hid_blocks': (5, 5, 5),
@@ -60,7 +60,7 @@ def generate_local(model, dataset, rng, batch_size, **kwargs):
 
 def run_training():
     # Initialize WandB once
-    runid = 'mnist_local_' + wandb.util.generate_id()
+    runid = 'cifar_mask' + wandb.util.generate_id()
     run = wandb.init(project='mnist-flow-matching', id=runid, config=CONFIG)
     runpath = PATH / f'runs/{run.name}_{run.id}'
     runpath.mkdir(parents=True, exist_ok=True)
@@ -74,7 +74,7 @@ def run_training():
     sde = VESDE(**CONFIG['sde'])
 
     # Load Data
-    dataset = load_from_disk(PATH / f'hf/mnist-linear-128')
+    dataset = load_from_disk(PATH / f'hf/cifar-mask-{CONFIG.corruption}')
     dataset.set_format('numpy')
 
     # --- START LAPS ---
