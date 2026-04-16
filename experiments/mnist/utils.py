@@ -22,49 +22,30 @@ def measure(A: Array, x: Array) -> Array:
     return jnp.einsum('...i,...ij->...j', x, A)
 
 
-def sample(
-        model: nn.Module,
-        y: Array,
-        A: Array,
-        key: Array,
-        shard: bool = False,
-        sampler: str = 'ddpm',
-        sde: Any = None,
-        steps: int = 256,
-        maxiter: int = 1,
-) -> Array:
+def sample(model, y, A, key, shard=False, sampler='ddpm', sde=None, steps=256, maxiter=1):
     if shard:
         y, A = distribute((y, A))
 
-    # 1. Ensure inputs are flat for the math
-    y_flat = y.reshape(y.shape[0], -1)  # (batch, 100)
+    # y is (16, 10, 10) -> (16, 100)
+    # A is (16, 784, 100)
+    # If the internal sample_any is written correctly, it should
+    # handle these batch dimensions natively without vmap.
 
-    # 2. Define a single-sample function for vmap
-    def single_sample(y_i, A_i, key_i):
-        return sample_any(
-            model=model,
-            shape=(784,),
-            shard=shard,
-            A=inox.Partial(measure, A_i),
-            y=y_i,
-            cov_y=1e-3 ** 2,
-            key=key_i,
-            sampler=sampler,
-            sde=sde,
-            steps=steps,
-            maxiter=maxiter,
-        )
+    x = sample_any(
+        model=model,
+        shape=(784,),  # Per-sample shape
+        shard=shard,
+        A=inox.Partial(measure, A),  # measure() uses einsum, which IS batch-aware
+        y=y.reshape(y.shape[0], -1),
+        cov_y=1e-3 ** 2,
+        key=key,
+        sampler=sampler,
+        sde=sde,
+        steps=steps,
+        maxiter=maxiter,
+    )
 
-    # 3. Create a batch of keys
-    batch_size = y.shape[0]
-    keys = jax.random.split(key, batch_size)
-
-    # 4. vmap across the batch dimension (axis 0) for y, A, and keys
-    # mapping over y (16, 100), A (16, 784, 100), and keys (16, 2)
-    x = jax.vmap(single_sample)(y_flat, A, keys)
-
-    # 5. Return reshaped batch: (batch, 28, 28, 1)
-    return x.reshape(batch_size, 28, 28, 1)
+    return x.reshape(-1, 28, 28, 1)
 
 
 def make_model(key: Array, **config) -> Denoiser:
