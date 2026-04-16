@@ -20,24 +20,21 @@ from pathlib import Path
 from utils import *
 
 PATH = Path(".")
-total_pixels = 784  # 28*28
+total_pixels = 784
 n_measurements = 100
 
 CONFIG = {
-    # Architecture
     'hid_channels': (128, 256, 384),
     'hid_blocks': (5, 5, 5),
     'kernel_size': (3, 3),
     'emb_features': 256,
     'heads': {1: 4},
     'dropout': 0.1,
-    # Sampling
     'sampler': 'ddpm',
     'sde': {'a': 1e-3, 'b': 1e2},
     'heuristic': 'cov_x',
     'discrete': 256,
     'maxiter': 1,
-    # Training
     'epochs': 256,
     'batch_size': 64,
     'scheduler': 'constant',
@@ -51,30 +48,24 @@ CONFIG = {
 }
 
 
-def make_A_on_the_fly(idx, total_pixels, n_measurements):
-    """Recreates the A matrix using the seed stored in the dataset."""
+def make_A_on_the_fly(idx):
     gen = torch.Generator(device='cpu').manual_seed(int(idx))
     A = torch.randn(total_pixels, n_measurements, generator=gen)
     A = A / torch.norm(A, dim=0, keepdim=True).clamp_min(1e-12)
     return A.numpy()
 
 
-def generate(model, dataset, rng, **kwargs):
-    # Pull batch_size from kwargs to avoid double-passing later
-    batch_size = kwargs.get('batch_size', 64)
-
+def generate(model, dataset, rng, batch_size, shard, sampler, sde, steps, maxiter):
     def transform(batch, indices):
-        # Reshape y from (batch, 10, 10) to (batch, 100)
         y = np.array(batch['y']).reshape(len(indices), -1)
         idx_seeds = np.array(batch['idx']).flatten()
 
-        A = np.stack([
-            make_A_on_the_fly(s, total_pixels, n_measurements)
-            for s in idx_seeds
-        ])
+        A = np.stack([make_A_on_the_fly(s) for s in idx_seeds])
 
-        # Ensure sample doesn't get duplicate img_size or batch_size
-        x = sample(model, y, A, rng.split(), img_size=28, **kwargs)
+        x = sample(
+            model=model, y=y, A=A, key=rng.split(),
+            shard=shard, sampler=sampler, sde=sde, steps=steps, maxiter=maxiter
+        )
         return {'x': np.asarray(x).reshape(-1, 28, 28, 1)}
 
     types = {'x': Array3D(shape=(28, 28, 1), dtype='float32')}
@@ -92,74 +83,46 @@ def generate(model, dataset, rng, **kwargs):
 
 def train_lap(run, runpath, lap: int, rng: inox.random.PRNG):
     config = run.config
-    mesh = jax.sharding.Mesh(jax.local_devices(), 'i')
-    replicated = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
-    distributed = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec('i'))
-
     sde = VESDE(**CONFIG.get('sde'))
+
     dataset = load_from_disk(PATH / f'hf/mnist-linear-{n_measurements}')
     dataset.set_format('numpy')
-
     trainset_yA = dataset['train']
     testset_yA = dataset['test']
 
-    # Evaluation subset preparation
+    # Eval data
     eval_indices = testset_yA[:16]['idx'].flatten()
     y_eval = testset_yA[:16]['y'].reshape(16, -1)
+    A_eval = np.stack([make_A_on_the_fly(i) for i in eval_indices])
 
-    def get_A_jax(idx):
-        # Recreate A matrix using JAX for the eval set to keep it in the graph if needed
-        # Note: Must match the logic of make_A_on_the_fly exactly
-        key = jax.random.PRNGKey(idx.astype(jnp.int32))
-        A = jax.random.normal(key, (total_pixels, n_measurements))
-        A = A / jnp.clip(jnp.linalg.norm(A, axis=0, keepdims=True), 1e-12, None)
-        return A
-
-    A_eval = jax.vmap(get_A_jax)(jnp.array(eval_indices))
-    y_eval, A_eval = jax.device_put((y_eval, A_eval), distributed)
-
-    # Initialization/Previous Model Loading
     if lap > 0:
         previous = load_module(runpath / f'checkpoint_{lap - 1}.pkl')
     else:
-        # Fit initial moments for Lap 0
         fit_data = trainset_yA[:16384]
         y_fit = fit_data['y'].reshape(16384, -1)
-        idx_fit = fit_data['idx'].flatten()
-
-        # We need A_fit for the GaussianDenoiser initial moments
-        A_fit = jax.vmap(get_A_jax)(jnp.array(idx_fit))
-        y_fit, A_fit = jax.device_put((y_fit, A_fit), distributed)
+        A_fit = np.stack([make_A_on_the_fly(i) for i in fit_data['idx'].flatten()])
 
         mu_x, cov_x = fit_moments(
-            features=total_pixels,
-            rank=64,
-            shard=True,
-            A=inox.Partial(measure, A_fit),
-            y=y_fit,
-            cov_y=1e-3 ** 2,
-            sampler='ddim',
-            sde=sde,
-            steps=256,
-            maxiter=None,
-            key=rng.split(),
+            features=total_pixels, rank=64, shard=False,
+            A=inox.Partial(measure, A_fit), y=y_fit,
+            cov_y=1e-3 ** 2, sampler='ddim', sde=sde,
+            steps=256, maxiter=None, key=rng.split(),
         )
         previous = GaussianDenoiser(mu_x, cov_x)
 
-    # Ensure previous model is sharded correctly
-    static_prev, arrays_prev = previous.partition()
-    previous = static_prev(jax.device_put(arrays_prev, replicated))
+    print(f"\n--- Lap {lap}: Generating data ---")
+    gen_args = {
+        'model': previous, 'dataset': trainset_yA, 'rng': rng,
+        'batch_size': config.batch_size, 'shard': False, 'sampler': config.sampler,
+        'sde': sde, 'steps': config.discrete, 'maxiter': config.maxiter
+    }
+    trainset = generate(**gen_args)
+    testset = generate(**{**gen_args, 'dataset': testset_yA})
 
-    print(f"\n--- Lap {lap}: Generating Synthetic Data ---")
-    # Call generate without passing batch_size twice (once in config, once explicitly)
-    trainset = generate(model=previous, dataset=trainset_yA, rng=rng, shard=False, **config)
-    testset = generate(model=previous, dataset=testset_yA, rng=rng, shard=False, **config)
-
-    # Moments & Model Initialization
     x_fit = flatten(trainset[:16384]['x'])
     mu_x, cov_x = ppca(x_fit, rank=64, key=rng.split())
 
-    model = previous if lap > 0 else make_model(key=rng.split(), img_size=28, **config)
+    model = previous if lap > 0 else make_model(key=rng.split(), **CONFIG)
     model.mu_x, model.cov_x = mu_x, cov_x
     model.train(True)
 
@@ -169,7 +132,6 @@ def train_lap(run, runpath, lap: int, rng: inox.random.PRNG):
     opt_state = optimizer.init(params)
     ema = EMA(decay=config.ema_decay)
     avrg = params
-    avrg, params, others, opt_state = jax.device_put((avrg, params, others, opt_state), replicated)
 
     @jax.jit
     def sgd_step(avrg, params, others, opt_state, x, key):
@@ -188,19 +150,16 @@ def train_lap(run, runpath, lap: int, rng: inox.random.PRNG):
     print(f"--- Lap {lap}: Training ---")
     for epoch in (bar := trange(config.epochs, ncols=88)):
         loader = trainset.shuffle(seed=int(rng.split()[0])).iter(batch_size=config.batch_size, drop_last_batch=True)
-        losses = []
-        for batch in prefetch(loader):
-            x = jax.device_put(flatten(batch['x']), distributed)
-            loss, avrg, params, opt_state = sgd_step(avrg, params, others, opt_state, x, rng.split())
-            losses.append(loss)
+        losses = [sgd_step(avrg, params, others, opt_state, flatten(batch['x']), rng.split())[0] for batch in
+                  prefetch(loader)]
 
         if (epoch + 1) % 16 == 0:
             model_eval = static(avrg, others)
             model_eval.train(False)
-            # Sample with cleaned kwargs to avoid TypeError in DDPM
-            x_samp = sample(model_eval, y_eval, A_eval, rng.split(), shard=True, img_size=28, **config)
+            x_samples = sample(model_eval, y_eval, A_eval, rng.split(), False, config.sampler, sde, config.discrete,
+                               config.maxiter)
             run.log({'lap': lap, 'loss': np.mean(losses),
-                     'samples': wandb.Image(to_pil(x_samp.reshape(4, 4, 28, 28, 1), zoom=4))})
+                     'samples': wandb.Image(to_pil(x_samples.reshape(4, 4, 28, 28, 1), zoom=4))})
         else:
             run.log({'lap': lap, 'loss': np.mean(losses)})
 
@@ -208,10 +167,9 @@ def train_lap(run, runpath, lap: int, rng: inox.random.PRNG):
 
 
 if __name__ == '__main__':
-    run = wandb.init(project='mnist-flow-matching', config=CONFIG)
+    run = wandb.init(project='mnist-flow-matching', id='mnist_diem_' + wandb.util.generate_id(), config=CONFIG)
     runpath = Path(f"runs/{run.name}_{run.id}")
     runpath.mkdir(parents=True, exist_ok=True)
     rng = inox.random.PRNG(42)
-
     for lap in range(32):
         train_lap(run, runpath, lap, rng)
