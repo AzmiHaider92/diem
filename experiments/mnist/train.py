@@ -57,7 +57,7 @@ def make_A_on_the_fly(idx, total_pixels, n_measurements):
 
 def generate(model, dataset, rng, **kwargs):
     batch_size = kwargs.get('batch_size', 64)
-    
+
     def transform(batch, indices):
         y = np.array(batch['y']).reshape(len(indices), -1)
         idx_seeds = np.array(batch['idx']).flatten()
@@ -67,7 +67,7 @@ def generate(model, dataset, rng, **kwargs):
             for s in idx_seeds
         ])
 
-        x = sample(model, y, A, rng.split(), img_size=28, **kwargs)
+        x = sample(model, y, A, rng.split(), **kwargs)
         return {'x': np.asarray(x).reshape(-1, 28, 28, 1)}
 
     types = {'x': Array3D(shape=(28, 28, 1), dtype='float32')}
@@ -177,9 +177,17 @@ def train_lap(run, runpath, lap: int, rng: inox.random.PRNG):
 
 
 if __name__ == '__main__':
-    run = wandb.init(project='mnist-flow-matching', config=CONFIG)
-    runpath = PATH / f'runs/{run.name}_{run.id}'
-    runpath.mkdir(parents=True, exist_ok=True)
+    runid = 'cifar_diem_' + wandb.util.generate_id()
+
+    run = wandb.init(
+        project='mnist-flow-matching',
+        id=runid,
+        config=CONFIG,
+    )
+
+    runpath = f'runs/{run.name}_{run.id}'
+    os.makedirs(runpath, exist_ok=True)
+
     rng = inox.random.PRNG(42)
 
     for lap in range(32):
