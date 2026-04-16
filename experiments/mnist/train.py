@@ -156,8 +156,19 @@ def train_lap(run, runpath, lap: int, rng: inox.random.PRNG):
         if (epoch + 1) % 16 == 0:
             model_eval = static(avrg, others)
             model_eval.train(False)
-            x_samples = sample(model_eval, y_eval, A_eval, rng.split(), False, config.sampler, sde, config.discrete,
-                               config.maxiter)
+            # After (Explicitly check that y_eval and A_eval are batches of 16)
+            x_samples = sample(
+                model=model_eval,
+                y=y_eval,  # Should be (16, 100)
+                A=A_eval,  # Should be (16, 784, 100)
+                key=rng.split(),
+                shard=False,
+                sampler=config.sampler,
+                sde=sde,
+                steps=config.discrete,
+                maxiter=config.maxiter
+            )
+
             run.log({'lap': lap, 'loss': np.mean(losses),
                      'samples': wandb.Image(to_pil(x_samples.reshape(4, 4, 28, 28, 1), zoom=4))})
         else:
