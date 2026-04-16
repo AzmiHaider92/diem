@@ -2,6 +2,7 @@
 
 from datasets import Array3D, Features, load_dataset
 from dawgz import after, job, schedule
+import torch
 
 # isort: split
 from utils import *
@@ -45,7 +46,5 @@ if __name__ == '__main__':
     schedule(
         corrupt,
         name='Data corruption',
-        backend='slurm',
-        export='ALL',
-        account='ariacpg',
+        backend='async',  # Changed from 'slurm' to 'async'
     )

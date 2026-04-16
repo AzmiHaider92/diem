@@ -69,7 +69,7 @@ def generate(model, dataset, rng, batch_size, **kwargs):
 
 def train(runid: int, lap: int):
     run = wandb.init(
-        project='mnist-flow-matching',
+        project='diem-cifar-mask',
         id=runid,
         resume='allow',
         dir=PATH,
@@ -302,7 +302,7 @@ def train(runid: int, lap: int):
 
 
 if __name__ == '__main__':
-    runid = 'cifar_diem_' + wandb.util.generate_id()
+    runid = wandb.util.generate_id()
 
     jobs = []
 
@@ -325,7 +325,7 @@ if __name__ == '__main__':
     schedule(
         *jobs,
         name=f'Training {runid}',
-        backend='async',
+        backend='slurm',
         export='ALL',
         account='ariacpg',
         env=['export WANDB_SILENT=true'],
