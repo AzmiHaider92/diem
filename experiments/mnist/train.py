@@ -24,8 +24,6 @@ total_pixels = 28*28
 n_measurements = 100
 
 CONFIG = {
-    # Data
-    'n_measurements': 100,
     # Architecture
     'hid_channels': (128, 256, 384),
     'hid_blocks': (5, 5, 5),
