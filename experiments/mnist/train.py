@@ -21,6 +21,7 @@ from utils import *
 
 PATH = Path(".")
 total_pixels = 28*28
+n_measurements = 100
 
 CONFIG = {
     # Data
@@ -68,7 +69,7 @@ def generate(model, dataset, rng, **kwargs):
         idx_seeds = np.array(batch['idx']).flatten()
 
         A = np.stack([
-            make_A_on_the_fly(s, CONFIG['total_pixels'], CONFIG['n_measurements'])
+            make_A_on_the_fly(s, total_pixels, n_measurements)
             for s in idx_seeds
         ])
 
@@ -95,14 +96,14 @@ def train_lap(run, runpath, lap: int, rng: inox.random.PRNG):
     distributed = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec('i'))
 
     sde = VESDE(**CONFIG.get('sde'))
-    dataset = load_from_disk(PATH / f'hf/mnist-linear-{config.n_measurements}')
+    dataset = load_from_disk(PATH / f'hf/mnist-linear-{n_measurements}')
     dataset.set_format('numpy')
 
     # Prep Eval Data
     eval_batch = dataset['test'][:16]
     y_eval = eval_batch['y'].reshape(16, -1)
     idx_eval = eval_batch['idx'].flatten()
-    A_eval = np.stack([make_A_on_the_fly(i, 784, config.n_measurements) for i in idx_eval])
+    A_eval = np.stack([make_A_on_the_fly(i, 784, n_measurements) for i in idx_eval])
     y_eval, A_eval = jax.device_put((y_eval, A_eval), distributed)
 
     if lap > 0:
@@ -111,7 +112,7 @@ def train_lap(run, runpath, lap: int, rng: inox.random.PRNG):
         fit_batch = dataset['train'][:16384]
         y_fit = fit_batch['y'].reshape(16384, -1)
         idx_fit = fit_batch['idx'].flatten()
-        A_fit = np.stack([make_A_on_the_fly(i, 784, config.n_measurements) for i in idx_fit])
+        A_fit = np.stack([make_A_on_the_fly(i, 784, n_measurements) for i in idx_fit])
         y_fit, A_fit = jax.device_put((y_fit, A_fit), distributed)
 
         mu_x, cov_x = fit_moments(
