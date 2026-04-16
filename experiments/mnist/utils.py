@@ -21,26 +21,20 @@ def measure(A: Array, x: Array) -> Array:
     """Linear projection forward model: y = x @ A"""
     return jnp.einsum('...i,...ij->...j', x, A)
 
-def sample(
-    model: nn.Module,
-    y: Array,
-    A: Array,
-    key: Array,
-    shard: bool = False,
-    sampler: str = 'ddpm',
-    sde: Any = None,
-    steps: int = 256,
-    maxiter: int = 1,
-) -> Array:
+
+def sample(model, y, A, key, shard=False, sampler='ddpm', sde=None, steps=256, maxiter=1):
     if shard:
         y, A = distribute((y, A))
 
+    # y comes in as (16, 10, 10). We need it flat for the math: (16, 100)
+    y_flat = y.reshape(y.shape[0], -1)
+
     x = sample_any(
         model=model,
-        shape=(784,),
+        shape=(784,),        # This is the target: 28x28 = 784
         shard=shard,
         A=inox.Partial(measure, A),
-        y=y,
+        y=y_flat,            # This is the input: 10x10 = 100
         cov_y=1e-3**2,
         key=key,
         sampler=sampler,
@@ -49,7 +43,8 @@ def sample(
         maxiter=maxiter,
     )
 
-    return unflatten(x, width=28, height=28)
+    # Return the batch of reconstructed images
+    return x.reshape(-1, 28, 28, 1)
 
 def make_model(key: Array, **config) -> Denoiser:
     return Denoiser(

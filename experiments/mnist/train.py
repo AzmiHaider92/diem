@@ -91,9 +91,16 @@ def train_lap(run, runpath, lap: int, rng: inox.random.PRNG):
     testset_yA = dataset['test']
 
     # Eval data
-    eval_indices = testset_yA[:16]['idx'].flatten()
-    y_eval = testset_yA[:16]['y'].reshape(16, -1)
-    A_eval = np.stack([make_A_on_the_fly(i) for i in eval_indices])
+    eval_data = testset_yA[:16]
+
+    # y_eval should be (16, 10, 10) from the dataset, reshape to (16, 100)
+    y_eval = eval_data['y'].reshape(16, 100)
+
+    # idx_eval should be (16,)
+    idx_eval = eval_data['idx'].flatten()
+
+    # A_eval should be (16, 784, 100)
+    A_eval = np.stack([make_A_on_the_fly(i) for i in idx_eval])
 
     if lap > 0:
         previous = load_module(runpath / f'checkpoint_{lap - 1}.pkl')
