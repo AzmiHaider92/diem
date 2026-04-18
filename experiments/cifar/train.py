@@ -234,7 +234,7 @@ def train_lap(run, runpath, lap: int, rng: inox.random.PRNG):
     # Save Checkpoint
     final_model = static(avrg, others)
     final_model.train(False)
-    dump_module(final_model, runpath / f'checkpoint_{lap}.pkl')
+    dump_module(final_model, Path(runpath + f'/checkpoint_{lap}.pkl'))
 
 
 if __name__ == '__main__':
